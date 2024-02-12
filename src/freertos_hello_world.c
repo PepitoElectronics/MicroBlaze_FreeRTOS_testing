@@ -9,10 +9,19 @@
 
 
     1 tab == 4 spaces!
+
+    many task running code
  */
 
+#define LCD_RS_MASK 0x40  // RS signal mask
+#define LCD_EN_MASK 0x01  // EN signal mask
+#define LCD_RW_MASK 0x01  // RW signal mask
+
+
+
+#include <stdlib.h>
+
 /* FreeRTOS includes. */
-#include "stdlib.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -32,6 +41,8 @@
 #define DELAY_10_SECONDS	10000UL
 #define DELAY_1_SECOND		1000UL
 #define TIMER_CHECK_THRESHOLD	9
+
+int my_sprintf_uint8(char *buf, uint8_t value);
 
 
 static void prvSpeedSelectorTask( void *pvParameters );
@@ -61,6 +72,9 @@ SemaphoreHandle_t xMutexAccessGPIO0;
 uint8_t data_t[4];
 
 
+XGpio Gpio;
+
+
 int main( void )
 {
 	const TickType_t x10seconds = pdMS_TO_TICKS( DELAY_10_SECONDS );
@@ -71,6 +85,8 @@ int main( void )
 
 
 	xMutexAccessGPIO0 = xSemaphoreCreateMutex();
+
+	XGpio_Initialize(&Gpio, XPAR_AXI_GPIO_0_DEVICE_ID);
 
 	/* Create the two tasks.  The Tx task is given a lower priority than the
 	Rx task, so the Rx task will leave the Blocked state and pre-empt the Tx
@@ -181,8 +197,6 @@ int main( void )
 static void prvSpeedSelectorTask( void *pvParameters )
 {
 	xSemaphoreTake(xMutexAccessGPIO0,portMAX_DELAY);
-	XGpio Gpio;
-	XGpio_Initialize(&Gpio, XPAR_AXI_GPIO_0_DEVICE_ID);
 	XGpio_SetDataDirection(&Gpio, 1, 0x01);
 	xSemaphoreGive(xMutexAccessGPIO0);
 	u32 speed = 0;
@@ -190,7 +204,8 @@ static void prvSpeedSelectorTask( void *pvParameters )
 	while(TRUE)
 	{
 		xSemaphoreTake(xMutexAccessGPIO0,portMAX_DELAY);
-		speed = XGpio_DiscreteRead(&Gpio, 1);
+		//speed = XGpio_DiscreteRead(&Gpio, 1);
+		speed = 1;
 		xSemaphoreGive(xMutexAccessGPIO0);
 		sleep(1);
 		if(speed != oldspeed){
@@ -206,9 +221,9 @@ static void prvSpeedSelectorTask( void *pvParameters )
 /*-----------------------------------------------------------*/
 static void blinkLEDTask( void *pvParameters )
 {
-	XGpio Gpio;
-	XGpio_Initialize(&Gpio, XPAR_AXI_GPIO_1_DEVICE_ID);
-	XGpio_SetDataDirection(&Gpio, 1, 0x00);
+	XGpio Gpio1;
+	XGpio_Initialize(&Gpio1, XPAR_AXI_GPIO_1_DEVICE_ID);
+	XGpio_SetDataDirection(&Gpio1, 1, 0x00);
 	u32 blink_value = 1;
 	u32 newSpeed = 1;
 	int ctr = 0;
@@ -225,7 +240,7 @@ static void blinkLEDTask( void *pvParameters )
 		}
 
 
-		XGpio_DiscreteWrite(&Gpio, 1, blink_value);
+		XGpio_DiscreteWrite(&Gpio1, 1, blink_value);
 		usleep(blinkSpeed);
 		blink_value <<= 1;
 		ctr++;
@@ -275,51 +290,113 @@ static void prvTxTask( void *pvParameters )
 static void prvRxTask( void *pvParameters )
 {
 	xSemaphoreTake(xMutexAccessGPIO0,portMAX_DELAY);
-	XGpio Gpio;
-	XGpio_Initialize(&Gpio, XPAR_AXI_GPIO_0_DEVICE_ID);
 	XGpio_SetDataDirection(&Gpio, 2, 0x00);
 	xSemaphoreGive(xMutexAccessGPIO0);
-
+	usleep(15000);
 
 	uint8_t receivedRandom;
-	void LCD_SendCommand(uint8_t command){
-		char data_u, data_l;
-		data_u = (command&0xf0);
-		data_l = ((command<<4)&0xf0);
-		data_t[0] = data_u|0x04;  //en=1, rs=0
-		data_t[1] = data_u|0x00;  //en=0, rs=0
-		data_t[2] = data_l|0x04;  //en=1, rs=0
-		data_t[3] = data_l|0x00;  //en=0, rs=0
-		for(int i = 0;i<4;i++){
-			xSemaphoreTake(xMutexAccessGPIO0,portMAX_DELAY);
-			XGpio_DiscreteWrite(&Gpio, 2, data_t[i]);
-			xSemaphoreGive(xMutexAccessGPIO0);
-			usleep(100000);
-		}
+	//const char lcdBUffer[] ="PEPITO";
+
+
+	void LCD_SendCommand(uint8_t command) {
+		uint8_t data_u, data_l;
+		data_u = (command&0xf0)>>1;
+		data_l = ((command<<4)&0xf0)>>1;
+
+		// Write upper nibble with EN = 1
+		XGpio_DiscreteWrite(&Gpio, 2, ((data_u) | LCD_EN_MASK | LCD_RW_MASK));
+		usleep(100);  // Wait for pulse width
+		// Write upper nibble with EN = 0
+		XGpio_DiscreteWrite(&Gpio, 2, (data_u) | LCD_RW_MASK);
+		usleep(100);  // Wait for pulse width
+
+		// Write lower nibble with EN = 1
+		XGpio_DiscreteWrite(&Gpio, 2, ((data_l) | LCD_EN_MASK) | LCD_RW_MASK);
+		usleep(100);  // Wait for pulse width
+
+		// Write lower nibble with EN = 0
+		XGpio_DiscreteWrite(&Gpio, 2, (data_l) | LCD_RW_MASK);
+		usleep(100);  // Wait for pulse width
+
 	}
-	void LCD_SendData(uint8_t data){
+
+	void LCD_SendData(char data) {
 		char data_u, data_l;
-		data_u = (data&0xf0);
-		data_l = ((data<<4)&0xf0);
-		data_t[0] = data_u|0x05;  //en=1, rs=1
-		data_t[1] = data_u|0x01;  //en=0, rs=1
-		data_t[2] = data_l|0x05;  //en=1, rs=1
-		data_t[3] = data_l|0x01;  //en=0, rs=1
+		data_u = (data&0xf0)>>1;
+		data_l = ((data<<4)&0xf0)>>1;
+		// Set RS = 1
+
+		// Write upper nibble with EN = 1
+		XGpio_DiscreteWrite(&Gpio, 2, (data_u) | LCD_EN_MASK | LCD_RS_MASK | LCD_RW_MASK);
+		usleep(100);  // Wait for pulse width
+
+		// Write upper nibble with EN = 0
+		XGpio_DiscreteWrite(&Gpio, 2, ((data_u) | LCD_RS_MASK | LCD_RW_MASK));
+		usleep(100);  // Wait for pulse width
+
+		// Write lower nibble with EN = 1
+		XGpio_DiscreteWrite(&Gpio, 2, ((data_l) | LCD_EN_MASK | LCD_RS_MASK | LCD_RW_MASK));
+		usleep(100);  // Wait for pulse width
+
+		// Write lower nibble with EN = 0
+		XGpio_DiscreteWrite(&Gpio, 2, ((data_l) | LCD_RS_MASK | LCD_RW_MASK));
+		usleep(100);  // Wait for pulse width
+
 	}
 
 	void LCD_Init(void) {
-		// 4 bit initialisation
-		LCD_SendCommand (0x20);
-		usleep(1000);
+		// Function Set: Initialize in 8-bit mode first
+		LCD_SendCommand(0x30); // First part of the command (DL = 1)
+		usleep(5000);  // Wait for the command to complete
 
-		// dislay initialisation
-		LCD_SendCommand (0x28); // Function set --> DL=0 (4 bit mode), N = 1 (2 line display) F = 0 (5x8 characters)
-		LCD_SendCommand (0x08); //Display on/off control --> D=0,C=0, B=0  ---> display off
-		LCD_SendCommand (0x01);  // clear display
-		LCD_SendCommand (0x06); //Entry mode set --> I/D = 1 (increment cursor) & S = 0 (no shift)
-		LCD_SendCommand (0x0C); //Display on/off control --> D = 1, C and B = 0. (Cursor and blink, last two bits)
+		LCD_SendCommand(0x20); // Second part of the command (DL = 0, 4-bit mode)
+		usleep(5000);  // Wait for the command to complete
+
+		LCD_SendCommand(0x20); // Second part of the command (DL = 0, 4-bit mode)
+		usleep(5000);  // Wait for the command to complete
+
+		// Function Set: 4-bit mode, 2 lines, 5x8 dot character font
+		LCD_SendCommand(0x28);
+		usleep(2000);  // Wait for the command to complete
+
+		// Display On/Off Control: Display on, cursor off, blinking off
+		LCD_SendCommand(0x0C);
+		usleep(2000);  // Wait for the command to complete
+
+		// Clear Display
+		LCD_SendCommand(0x01);
+		usleep(2000);  // Wait for the command to complete
+
+		// Entry Mode Set: Increment cursor, no display shift
+		LCD_SendCommand(0x06);
+		usleep(2000);  // Wait for the command to complete
+
+		usleep(2000);          // Wait for clear display command to complete
+	}
+
+	void LCD_Print(char *str) {
+		while (*str) {
+			LCD_SendData(*str++);
+		}
+	}
+
+	void LCD_Clear(void) {
+		LCD_SendCommand(0x01); // Clear display
+		usleep(2000);          // Wait for clear display command to complete
+	}
+
+	void LCD_SetCursor(uint8_t row, uint8_t col) {
+		// Calculate DDRAM address based on row and column
+		uint8_t address = col + (row == 0 ? 0x00 : 0x40);
+
+		// Set cursor to specified address
+		LCD_SendCommand(0x80 | address);
 	}
 	LCD_Init();
+	LCD_SetCursor(0,0);
+	LCD_Clear();
+	//my_sprintf_uint8(lcdBUffer, receivedRandom);
+	LCD_Print("PEPITO");
 
 	for( ;; )
 	{
@@ -330,6 +407,8 @@ static void prvRxTask( void *pvParameters )
 
 		/* Print the received data. */
 		xil_printf( "Rx task received string from Tx task: %u\r\n", receivedRandom );
+		//sprintf(lcdBUffer,"data : %u",receivedRandom);
+
 	}
 }
 
@@ -347,3 +426,33 @@ static void vTimerCallback( TimerHandle_t pxTimer )
 	xil_printf("timer reloaded");
 }
 
+
+
+int my_sprintf_uint8(char *buf, uint8_t value) {
+	char digits[3];  // Maximum 3 digits for a uint8_t value
+	int len = 0;
+
+	// Convert the uint8_t value to a string of digits
+	int i = 0;
+	do {
+		digits[i++] = '0' + (value % 10);
+		value /= 10;
+	} while (value > 0);
+	digits[i] = '\0';
+
+	// Reverse the string of digits
+	for (int j = 0; j < i / 2; j++) {
+		char temp = digits[j];
+		digits[j] = digits[i - j - 1];
+		digits[i - j - 1] = temp;
+	}
+
+	// Copy the string of digits to the buffer
+	while (digits[len] != '\0') {
+		buf[len] = digits[len];
+		len++;
+	}
+	buf[len] = '\0';
+
+	return len;  // Return the length of the formatted string
+}
