@@ -13,8 +13,6 @@
  many task running code
 
  AIming to test diff hardware on board >...
-
- new test fort github
  */
 
 #define LCD_RS_MASK 0x0002  // RS signal mask
